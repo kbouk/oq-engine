@@ -268,15 +268,9 @@ class VulnerabilityFunction(object):
             cols = None
         sampler = Sampler(self.distribution_name, rng, lratios, cols, minloss)
         if not hasattr(self, 'covs') or self.covs.any():  # slow lane
-            loss_matrix = sparse.dok_matrix(AE)
-            df = asset_df.join(ratio_df)
-            # print(df.memory_usage().sum())
-            for eid, df in df.groupby('eid'):
-                loss_matrix[df.aid, eid] = sampler.get_losses(eid, df)
-            loss_matrix = loss_matrix.tocoo()
+            loss_matrix = self.sample(asset_df.join(ratio_df), sampler, AE)
         else:  # fast lane for zero CoVs
             df = ratio_df.join(asset_df, how='inner')
-            # print(df.memory_usage().sum())
             aids = df['aid'].to_numpy()
             eids = df['eid'].to_numpy()
             means = df['mean'].to_numpy()
@@ -286,6 +280,26 @@ class VulnerabilityFunction(object):
         if testmode:
             loss_matrix = loss_matrix.todense()
         return loss_matrix
+
+    def sample(self, ratio_df, sampler, AE):
+        size = ratio_df.memory_usage().sum()
+        aids = []
+        eids = []
+        losses = []
+        if size > 1E8:  # 100 MB
+            for eid in ratio_df.eid.unique():
+                df = ratio_df[ratio_df.eid == eid]
+                ls = sampler.get_losses(eid, df)
+                aids.extend(df.aid)
+                eids.extend([eid] * len(ls))
+                losses.extend(ls)
+        else:  # not much memory
+            for eid, df in ratio_df.groupby('eid'):
+                ls = sampler.get_losses(eid, df)
+                aids.extend(df.aid)
+                eids.extend([eid] * len(ls))
+                losses.extend(ls)
+        return sparse.coo_matrix((losses, (aids, eids)), AE)
 
     def strictly_increasing(self):
         """
